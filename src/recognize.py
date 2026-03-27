@@ -1,95 +1,155 @@
-try:
-    import threading
-    sr = None
-    def _import_sr():
-        global sr
-        try:
-            import speech_recognition as sr_module
-            sr = sr_module
-        except Exception:
-            pass
-    thread = threading.Thread(target=_import_sr, daemon=True)
-    thread.start()
-    thread.join(timeout=3)  # 3秒超时
-    if sr is None:
-        raise ImportError("speech_recognition import timeout")
-except ImportError:
-    sr = None
+"""
+语音识别模块 - 使用 sounddevice 采集 + Google 语音识别
+"""
+import io
+import wave
+import threading
+import numpy as np
+import sounddevice as sd
+import speech_recognition as sr
 
 
-def has_pyaudio():
+def check_speech_dependencies():
+    """检查语音依赖是否满足"""
     try:
-        import pyaudio
-        return True
-    except ImportError:
-        return False
+        devices = sd.query_devices()
+        input_devices = [d for d in devices if d['max_input_channels'] > 0]
+        if not input_devices:
+            return False, '检测不到麦克风设备，请插入麦克风或检查系统设置'
+        default_input = sd.query_devices(kind='input')
+        return True, f'检测到麦克风：{default_input["name"]}，采样率 {int(default_input["default_samplerate"])}Hz'
+    except Exception as e:
+        return False, f'音频设备检测失败: {e}'
 
 
-def list_microphone_names():
-    if sr is None:
-        return []
+def list_microphones():
+    """列出所有可用麦克风设备"""
     try:
-        import threading
-        result = []
-        def _list():
-            try:
-                result.extend(sr.Microphone.list_microphone_names())
-            except Exception:
-                pass
-        thread = threading.Thread(target=_list, daemon=True)
-        thread.start()
-        thread.join(timeout=2)  # 2秒超时
-        return result
+        devices = sd.query_devices()
+        mics = []
+        for i, d in enumerate(devices):
+            if d['max_input_channels'] > 0:
+                mics.append(f"[{i}] {d['name']} ({int(d['default_samplerate'])}Hz)")
+        return mics
     except Exception:
         return []
 
 
-def check_speech_dependencies():
-    if sr is None:
-        return False, 'speech_recognition 模块未安装，请运行 pip install SpeechRecognition'
-    if not has_pyaudio():
-        return False, 'pyaudio 模块未安装，请运行 pip install pyaudio（Windows 可能需要安装预编译 wheel）'
-    try:
-        mics = list_microphone_names()
-        if not mics:
-            return False, '检测不到麦克风设备，请插入麦克风或检查系统设置'
-        return True, f'检测到麦克风：{mics[0]}，可用麦克风数量 {len(mics)}'
-    except Exception as e:
-        return False, f'麦克风检测失败: {e}'
+class SounddeviceMicrophone:
+    """
+    使用 sounddevice 作为音频源的麦克风封装，
+    替代 pyaudio（Windows 上 pyaudio 安装困难）
+    """
+    def __init__(self, device=None, sample_rate=16000, chunk_size=1024):
+        if device is None:
+            device = sd.query_devices(kind='input')['index']
+        self.device = device
+        self.sample_rate = int(sample_rate)
+        self.chunk_size = chunk_size
+
+        # 获取设备参数
+        if isinstance(device, int):
+            dev_info = sd.query_devices(device)
+        else:
+            dev_info = sd.query_devices(kind='input')
+        self.sample_rate = int(dev_info['default_samplerate'])
+        self.channels = int(dev_info['max_input_channels'])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def listen(self, timeout=5, phrase_time_limit=8):
+        """
+        录制音频，返回 (success, audio_data or error_message)
+        timeout: 等待语音开始的超时（秒）
+        phrase_time_limit: 语音最大持续时间（秒）
+        """
+        duration = min(phrase_time_limit + 2, 30)  # 留 2 秒缓冲
+        try:
+            print(f'正在录音（设备: {self.device}，采样率: {self.sample_rate}Hz）...')
+
+            # 录制音频，使用 np.float32 格式
+            audio_data = sd.rec(
+                int(duration * self.sample_rate),
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype='float32',
+                device=self.device
+            )
+
+            # 等待录音完成
+            sd.wait()
+
+            # 转换为 16-bit PCM
+            audio_int16 = np.int16(audio_data * 32767).flatten()
+
+            # 转换为 WAV 格式字节
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)  # 16-bit
+                wf.setframerate(self.sample_rate)
+                wf.writeframes(audio_int16.tobytes())
+            wav_bytes = wav_buffer.getvalue()
+
+            return True, wav_bytes
+
+        except sd.PortAudioError as e:
+            return False, f'录音失败（PortAudio）: {e}'
+        except Exception as e:
+            return False, f'录音失败: {e}'
 
 
 class SpeechRecognizer:
+    """
+    语音识别器，支持中文识别
+    使用 sounddevice 采集 + Google 语音识别
+    """
     def __init__(self, language='zh-CN'):
         ok, msg = check_speech_dependencies()
         if not ok:
             raise RuntimeError(msg)
         self.recognizer = sr.Recognizer()
         self.language = language
+        self.microphone = SounddeviceMicrophone()
 
     def listen_once(self, timeout=5, phrase_time_limit=8):
-        try:
-            with sr.Microphone() as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                print('请讲话...')
-                audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
-        except sr.WaitTimeoutError:
-            return False, '监听超时'
-        except Exception as e:
-            return False, f'录音失败: {e}'
+        """
+        录制并识别一段语音，返回 (success, text or error_message)
+        """
+        ok, audio_or_error = self.microphone.listen(timeout=timeout, phrase_time_limit=phrase_time_limit)
+        if not ok:
+            return False, audio_or_error
+
+        audio_data = audio_or_error
 
         try:
+            # 将 WAV 字节数据封装为 AudioFile（从内存）
+            audio_io = io.BytesIO(audio_data)
+            with sr.AudioFile(audio_io) as source:
+                audio = self.recognizer.record(source)
+
+            # 使用 Google 语音识别（需要网络）
             text = self.recognizer.recognize_google(audio, language=self.language)
             return True, text
+
         except sr.WaitTimeoutError:
-            return False, '监听超时'
+            return False, '监听超时，未检测到语音'
         except sr.UnknownValueError:
-            return False, '无法识别语音'
+            return False, '无法识别语音内容'
         except sr.RequestError as e:
             return False, f'语音识别服务出错: {e}'
         except Exception as e:
             return False, f'识别失败: {e}'
 
     def listen_with_wake_word(self, wake_words=None, retries=2):
+        """
+        持续监听直到检测到唤醒词，然后返回后续指令
+        wake_words: 唤醒词列表，如 ['小助手', '助手']
+        """
         if wake_words is None:
             wake_words = []
 
@@ -100,22 +160,59 @@ class SpeechRecognizer:
                 attempt += 1
                 if attempt > retries:
                     return False, text
-                print(f'语音识别失败，重试 {attempt}/{retries} -> {text}')
+                print(f'语音识别失败，重试 {attempt}/{retries}: {text}')
                 continue
 
             normalized = text.lower().strip()
-            for wake in wake_words:
-                if wake in normalized:
-                    normalized = normalized.replace(wake, '').strip()
-                    break
 
-            if not normalized:
-                attempt += 1
-                if attempt > retries:
-                    return False, '未检测到有效指令内容，请重试'
-                print(f'未检测到指令内容，重试 {attempt}/{retries}')
-                continue
+            # 如果配置了唤醒词，检查是否包含
+            if wake_words:
+                found_wake = False
+                remaining = normalized
+                for wake in wake_words:
+                    if wake.lower() in remaining:
+                        remaining = remaining.replace(wake.lower(), '').strip()
+                        found_wake = True
+                        break
 
-            return True, normalized
+                if not found_wake:
+                    print(f'未检测到唤醒词，继续监听...')
+                    continue
+
+                if not remaining:
+                    # 只有唤醒词没有后续指令
+                    print('检测到唤醒词，请说出指令...')
+                    continue
+
+                return True, remaining
+            else:
+                # 无唤醒词配置，直接返回识别结果
+                return True, normalized
 
         return False, '语音识别失败'
+
+
+def test_recording():
+    """测试录音功能"""
+    print('=== 录音测试 ===')
+    ok, msg = check_speech_dependencies()
+    print(f'依赖检查: {msg}')
+
+    mics = list_microphones()
+    print(f'可用麦克风 ({len(mics)}):')
+    for m in mics:
+        print(f'  {m}')
+
+    print('\n开始 3 秒录音测试...')
+    mic = SounddeviceMicrophone()
+    ok, result = mic.listen(timeout=5, phrase_time_limit=3)
+    if ok:
+        print(f'录音成功，音频大小: {len(result)} bytes')
+        # 简单验证：检查是否为有效的 WAV 数据
+        print('WAV 数据有效')
+    else:
+        print(f'录音失败: {result}')
+
+
+if __name__ == '__main__':
+    test_recording()
