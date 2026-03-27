@@ -2,7 +2,7 @@ import os
 import json
 
 DEFAULT_CONFIG = {
-    'wake_words': ['小助手', '助手', '你好助手'],
+    'wake_words': ['你好麦麦'],
     'language': 'zh-CN',
     'tts_engine': 'pyttsx3',
     'intents_path': os.path.join(os.path.dirname(__file__), '..', 'data', 'intents.json'),
