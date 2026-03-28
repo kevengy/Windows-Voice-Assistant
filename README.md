@@ -9,6 +9,7 @@
 - **语音识别** — Sherpa-onnx + SenseVoice（本地离线，无需网络），自动检测可用引擎
 - **双模式输入** — 语音模式和文本模式可随时切换
 - **ASR 纠错** — 自动修正语音识别错误（如"打一微信"→"打开微信"）
+- **中文数字识别** — 支持"百分之五十"、"八十"等中文数字转换为阿拉伯数字
 
 ### 应用管理
 - **打开/关闭应用** — 语音或文本指令打开/关闭任意应用
@@ -102,7 +103,7 @@
 pip install sounddevice SpeechRecognition pyyaml win10toast pyttsx3
 
 # V2 增强依赖（推荐安装）
-pip install pypinyin rapidfuzz pyautogui jieba
+pip install pypinyin rapidfuzz pyautogui jieba pycaw
 
 # V2 可选（语义匹配，需要较大模型）
 pip install sentence-transformers torch
@@ -243,6 +244,11 @@ def execute(slots):
 ```
 
 ## 版本历史
+
+### v1.4
+- 新增中文数字识别（百分之五十→50，八十→80，一百五十→150）
+- 实现真实的系统音量控制（使用 pycaw）
+- 修复音量指令 slot 提取问题（支持"调音量到XX"等多种表达）
 
 ### v1.3
 - 新增系统面板控制（设置、控制面板、任务管理器、网络/蓝牙/声音/显示设置等）
