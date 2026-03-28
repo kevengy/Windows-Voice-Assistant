@@ -1,5 +1,7 @@
 """
-语音识别模块 - 使用 sounddevice 采集 + Google 语音识别
+语音识别模块 - 支持多种语音识别后端
+- Google STT (需要网络)
+- Sherpa-onnx + SenseVoice (本地离线，推荐)
 """
 import io
 import wave
@@ -227,6 +229,189 @@ class SpeechRecognizer:
                 return True, remaining
             else:
                 # 无唤醒词配置，直接返回识别结果
+                return True, normalized
+
+        return False, '语音识别失败'
+
+
+class SherpaONNXRecognizer:
+    """
+    本地离线语音识别器，使用 sherpa-onnx + SenseVoice 模型
+    完全离线，无需网络，中文识别率高
+
+    使用方法：
+    1. 下载 SenseVoice 模型：https://github.com/k2-fsa/sherpa-onnx/releases
+       寻找：sherpa-onnx-sense-voice-zh-en-ja-ko-yue-*.tar.bz2
+    2. 解压到项目目录，如 models/sense_voice/
+    3. 在 config.yaml 中设置 speech.engine: sherpaonnx
+    """
+
+    _instance = None  # 类级别缓存，避免重复加载模型
+
+    def __init__(self, model_path='models/sense_voice', num_threads=4):
+        """
+        初始化 sherpa-onnx 识别器
+
+        Args:
+            model_path: 模型文件夹路径（包含 model.onnx 和 tokens.txt）
+            num_threads: CPU 推理线程数
+        """
+        ok, msg = check_speech_dependencies()
+        if not ok:
+            raise RuntimeError(msg)
+
+        # 如果没有传入绝对路径，尝试相对于当前工作目录
+        import os
+        _src_dir = os.path.dirname(os.path.dirname(__file__))
+        if not os.path.isabs(model_path):
+            model_path = os.path.join(_src_dir, model_path)
+
+        # 检查路径是否包含非ASCII字符（中文路径会导致 ONNX 加载失败）
+        try:
+            model_path.encode('ascii')
+            use_rel_path = False
+        except UnicodeEncodeError:
+            use_rel_path = True
+
+        # 优先使用 INT8/Q8 量化版本（更小更快）
+        for model_name in ['model.int8.onnx', 'model_q8.onnx', 'model.onnx']:
+            candidate = os.path.join(model_path, model_name)
+            if os.path.exists(candidate):
+                model_file = candidate
+                break
+        else:
+            model_file = os.path.join(model_path, 'model.onnx')
+
+        if not os.path.exists(model_file):
+            raise FileNotFoundError(
+                f'模型文件不存在: {model_file}\n'
+                f'请下载 SenseVoice 模型并解压到 {model_path}\n'
+                f'下载地址: https://github.com/k2-fsa/sherpa-onnx/releases'
+            )
+        # 查找 tokens 文件
+        for tokens_name in ['tokens.txt', 'tokens (1).txt', 'tokens.txt']:
+            tokens_file = os.path.join(model_path, tokens_name)
+            if os.path.exists(tokens_file):
+                break
+        if not os.path.exists(tokens_file):
+            raise FileNotFoundError(f'tokens.txt 不存在: {tokens_file}')
+
+        # 如果路径包含中文，使用相对路径（ONNX loader 不支持中文路径）
+        if use_rel_path:
+            model_file = os.path.relpath(model_file)
+            tokens_file = os.path.relpath(tokens_file)
+
+        print(f'加载模型: {os.path.basename(model_file)}')
+
+        # 复用已加载的模型实例
+        cache_key = (model_file, num_threads)
+        if SherpaONNXRecognizer._instance is None or \
+           getattr(SherpaONNXRecognizer._instance, '_cache_key', None) != cache_key:
+            from sherpa_onnx import OfflineRecognizer
+            recognizer = OfflineRecognizer.from_sense_voice(
+                model=model_file,
+                tokens=tokens_file,
+                num_threads=num_threads,
+            )
+            SherpaONNXRecognizer._instance = recognizer
+            SherpaONNXRecognizer._instance._cache_key = cache_key
+
+        self.recognizer = SherpaONNXRecognizer._instance
+        self.microphone = SounddeviceMicrophone()
+        self.sample_rate = self.microphone.sample_rate
+
+    def listen_once(self, timeout=5, phrase_time_limit=8):
+        """
+        录制并识别一段语音，返回 (success, text or error_message)
+        """
+        ok, audio_or_error = self.microphone.listen(timeout=timeout, phrase_time_limit=phrase_time_limit)
+        if not ok:
+            return False, audio_or_error
+
+        audio_data = audio_or_error
+
+        try:
+            # 解析 WAV 数据
+            audio_io = io.BytesIO(audio_data)
+            with wave.open(audio_io, 'rb') as wf:
+                assert wf.getnchannels() == 1, '仅支持单声道音频'
+                assert wf.getsampwidth() == 2, '仅支持 16-bit 音频'
+                sample_rate = wf.getframerate()
+                frames = wf.readframes(wf.getnframes())
+
+            # 转换为 numpy 数组（int16）
+            audio_samples = np.frombuffer(frames, dtype=np.int16)
+
+            # 创建 OfflineStream 并识别
+            stream = self.recognizer.create_stream()
+            stream.accept_waveform(sample_rate, audio_samples)
+            self.recognizer.decode_stream(stream)
+
+            text = stream.result.text.strip()
+            if not text:
+                return False, '未识别到语音内容'
+
+            return True, text
+
+        except FileNotFoundError as e:
+            return False, f'模型文件缺失: {e}'
+        except Exception as e:
+            return False, f'识别失败: {e}'
+
+    def listen_with_wake_word(self, wake_words=None, retries=2):
+        """
+        持续监听直到检测到唤醒词，然后返回后续指令
+        """
+        if wake_words is None:
+            wake_words = []
+
+        attempt = 0
+        while attempt <= retries:
+            ok, text = self.listen_once()
+            if not ok:
+                attempt += 1
+                if attempt > retries:
+                    return False, text
+                print(f'语音识别失败，重试 {attempt}/{retries}: {text}')
+                continue
+
+            normalized = text.lower().strip()
+            print(f'[调试] 识别结果: [{text}] -> normalized: [{normalized}]')
+
+            if wake_words:
+                found_wake = False
+                remaining = normalized
+                for wake in wake_words:
+                    wake_lower = wake.lower()
+                    if wake_lower in remaining:
+                        remaining = remaining.replace(wake_lower, '', 1).strip()
+                        found_wake = True
+                        print(f'[调试] 精确匹配唤醒词 [{wake}] 成功，剩余: [{remaining}]')
+                        break
+
+                    from difflib import SequenceMatcher
+                    wake_prefix = wake_lower[:max(2, len(wake_lower) - 2)]
+                    for i in range(len(remaining) - len(wake_prefix) + 1):
+                        chunk = remaining[i:i + len(wake_prefix) + 2]
+                        ratio = SequenceMatcher(None, wake_prefix, chunk).ratio()
+                        if ratio >= 0.8:
+                            remaining = remaining[i + len(wake_prefix) + 2:].strip()
+                            found_wake = True
+                            print(f'[调试] 模糊匹配唤醒词 [{wake}] 成功（相似度 {ratio:.2f}），剩余: [{remaining}]')
+                            break
+                    if found_wake:
+                        break
+
+                if not found_wake:
+                    print(f'未检测到唤醒词，继续监听...')
+                    continue
+
+                if not remaining:
+                    print('检测到唤醒词，请说出指令...')
+                    continue
+
+                return True, remaining
+            else:
                 return True, normalized
 
         return False, '语音识别失败'

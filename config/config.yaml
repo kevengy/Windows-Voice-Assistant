@@ -4,6 +4,8 @@ wake_words:
   - 助手
   - 你好助手
 language: zh-CN
+speech_engine: sherpaonnx  # google (需要网络) / sherpaonnx (本地离线，推荐)
+speech_model_path: models/sense_voice  # sherpa-onnx 模型路径（相对于项目根目录）
 tts_engine: pyttsx3
 intents_path: ../data/intents.json
 intent_descriptions_path: ../data/intent_descriptions.json

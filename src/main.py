@@ -15,7 +15,7 @@ try:
     from .intents import IntentParser
     from .logger import configure_logging, get_logger
     from .plugins import PluginManager
-    from .recognize import SpeechRecognizer, check_speech_dependencies
+    from .recognize import SpeechRecognizer, SherpaONNXRecognizer, check_speech_dependencies
     from .nlu.phonetic_corrector import PhoneticCorrector
     from .nlu.fuzzy_regex import FuzzyRegexMatcher
 except ImportError:
@@ -25,9 +25,51 @@ except ImportError:
     from intents import IntentParser
     from logger import configure_logging, get_logger
     from plugins import PluginManager
-    from recognize import SpeechRecognizer, check_speech_dependencies
+    from recognize import SpeechRecognizer, SherpaONNXRecognizer, check_speech_dependencies
     from phonetic_corrector import PhoneticCorrector
     from fuzzy_regex import FuzzyRegexMatcher
+
+
+def create_recognizer(cfg):
+    """根据配置创建语音识别器，自动检测可用引擎"""
+    import os
+
+    # 获取模型路径（支持绝对路径和相对路径）
+    model_path = cfg.get('speech_model_path', '../models/sense_voice')
+    if not os.path.isabs(model_path):
+        model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), model_path)
+
+    # 优先使用 INT8/Q8 量化版本
+    model_file = None
+    for m in ['model.int8.onnx', 'model_q8.onnx', 'model.onnx']:
+        candidate = os.path.join(model_path, m)
+        if os.path.exists(candidate):
+            model_file = candidate
+            break
+
+    # 查找 tokens 文件
+    tokens_file = None
+    for t in ['tokens.txt', 'tokens (1).txt']:
+        candidate = os.path.join(model_path, t)
+        if os.path.exists(candidate):
+            tokens_file = candidate
+            break
+
+    # 自动检测：优先使用本地 sherpa-onnx
+    if model_file and tokens_file:
+        try:
+            engine = cfg.get('speech_engine', 'auto')
+            if engine == 'google':
+                print('强制使用 Google STT（需要网络）')
+                return SpeechRecognizer(language=cfg.get('language', 'zh-CN'))
+            print('自动选择：sherpa-onnx 本地离线识别')
+            return SherpaONNXRecognizer(model_path=model_path)
+        except Exception as e:
+            print(f'sherpa-onnx 初始化失败: {e}，回退到 Google STT')
+            return SpeechRecognizer(language=cfg.get('language', 'zh-CN'))
+    else:
+        print('未检测到 sherpa-onnx 模型，自动使用 Google STT（需要网络）')
+        return SpeechRecognizer(language=cfg.get('language', 'zh-CN'))
 
 
 def main():
@@ -92,10 +134,27 @@ def main():
     logger.info('语音助手启动完成')
     print('语音模块检测:', dep_msg)
 
-    print('欢迎使用 Windows 交互语音助手（输入“退出”结束）')
-    print('输入 1 进入语音输入模式；输入 0 继续文本输入。')
-    print('Entering main loop...')
-    use_voice = False
+    # 启动时直接初始化语音识别器
+    if voice_available:
+        try:
+            recognizer = create_recognizer(cfg)
+            logger.info('语音识别模块初始化成功')
+            print('语音识别初始化成功')
+        except Exception as e:
+            logger.warning(f'语音识别初始化失败: {e}')
+            print(f'语音识别初始化失败，回退到 Google STT')
+            try:
+                from .recognize import SpeechRecognizer
+                recognizer = SpeechRecognizer(language=cfg.get('language', 'zh-CN'))
+                logger.info('Google STT 初始化成功')
+            except Exception as e2:
+                logger.warning(f'Google STT 初始化失败: {e2}')
+                recognizer = None
+
+    # 直接进入语音模式
+    print('欢迎使用 Windows 交互语音助手（输入”退出”结束）')
+    print('>>> 语音模式已启用 <<<')
+    use_voice = True
 
     while True:
         try:
@@ -122,8 +181,8 @@ def main():
                 use_voice = (query == '1')
                 if use_voice and voice_available and recognizer is None:
                     try:
-                        recognizer = SpeechRecognizer(language=cfg.get('language', 'zh-CN'))
-                        logger.info('语音识别模块初始化成功')
+                        recognizer = create_recognizer(cfg)
+                        logger.info(f'语音识别模块初始化成功 (引擎: {cfg.get("speech_engine", "google")})')
                     except Exception as e:
                         voice_available = False
                         logger.warning(f'语音识别初始化失败: {e}')

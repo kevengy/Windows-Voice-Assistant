@@ -6,7 +6,7 @@
 
 ### 语音控制
 - **唤醒词检测** — 支持配置唤醒词，唤醒后说出指令
-- **语音识别** — 使用 Google 语音识别引擎，支持中文
+- **语音识别** — Sherpa-onnx + SenseVoice（本地离线，无需网络），自动检测可用引擎
 - **双模式输入** — 语音模式和文本模式可随时切换
 - **ASR 纠错** — 自动修正语音识别错误（如"打一微信"→"打开微信"）
 
@@ -79,7 +79,22 @@ pip install pypinyin rapidfuzz pyautogui jieba
 
 # V2 可选（语义匹配，需要较大模型）
 pip install sentence-transformers torch
+
+# 本地语音识别（可选，推荐）
+pip install sherpa-onnx
 ```
+
+### 下载语音模型（可选）
+
+如需本地离线语音识别，需下载 SenseVoice 模型：
+
+1. 下载地址：https://github.com/k2-fsa/sherpa-onnx/releases
+2. 寻找：`sherpa-onnx-sense-voice-*-x64-windows.tar.bz2`
+3. 解压到 `models/sense_voice/` 目录
+
+程序会自动检测模型是否可用：
+- 有模型 → 使用 Sherpa-onnx 本地离线识别
+- 无模型 → 自动切换到 Google STT（需要网络）
 
 ## 运行
 
@@ -89,13 +104,13 @@ python src/main.py
 
 ## 使用方式
 
-### 文本模式（默认）
-启动后直接输入指令，如 `打开微信`
+### 语音模式（默认）
+程序启动后直接进入语音模式，说出 **唤醒词 + 指令**，如：
+- `你好小猪打开微信`
+- `小助手关闭浏览器`
 
-### 语音模式
-1. 输入 `1` 切换到语音模式
-2. 说出 **唤醒词 + 指令**，如 `你好小猪打开微信`
-3. 输入 `0` 切回文本模式
+### 文本模式
+输入 `0` 切换到文本模式，输入 `1` 切回语音模式
 
 ### ASR 纠错说明
 语音识别可能将"打开微信"误识别为"打一微信"，纠错模块会自动修正后再解析，无需重复指令。
@@ -113,6 +128,8 @@ wake_words:
   - 助手
   - 你好助手
 language: zh-CN
+speech_engine: sherpaonnx  # 语音引擎：sherpaonnx（本地）/ google（网络）
+speech_model_path: models/sense_voice  # sherpa-onnx 模型路径
 tts_engine: pyttsx3
 intents_path: ../data/intents.json
 intent_descriptions_path: ../data/intent_descriptions.json
@@ -136,6 +153,10 @@ Windows-interact-assistant/
 ├── data/
 │   ├── intents.json        # 意图定义
 │   └── intent_descriptions.json  # 语义匹配语料（V2）
+├── models/
+│   └── sense_voice/        # 语音识别模型（可选，需下载）
+│       ├── model_q8.onnx
+│       └── tokens.txt
 ├── plugins/
 │   └── example_plugin.py   # 插件示例
 ├── src/
@@ -153,7 +174,8 @@ Windows-interact-assistant/
 │   ├── recognize.py        # 语音识别
 │   ├── feedback.py         # 反馈（TTS/通知）
 │   └── logger.py           # 日志
-└── README.md
+├── README.md
+└── 功能规划大纲.md
 ```
 
 ## 扩展插件
@@ -184,6 +206,11 @@ def execute(slots):
 ```
 
 ## 版本历史
+
+### v1.2
+- 新增本地离线语音识别（Sherpa-onnx + SenseVoice）
+- 程序启动直接进入语音模式
+- 自动检测可用语音引擎
 
 ### v1.1
 - 新增 NLU 增强模块（FuzzyRegex、ASR 纠错）
