@@ -3,6 +3,8 @@ import shutil
 import subprocess
 import threading
 import time
+import ctypes
+import sys
 
 
 DEFAULT_APP_MAP = {
@@ -20,7 +22,7 @@ DEFAULT_APP_MAP = {
     'powershell': 'powershell.exe',
 
     # 浏览器
-    '浏览器': 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    '浏览器': 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
     'chrome': 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     '谷歌浏览器': 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     'googlechrome': 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
@@ -278,7 +280,7 @@ def resolve_app_executable(app_name):
             if normalized in key.split() or key in normalized.split():
                 if os.path.exists(value) or shutil.which(value):
                     return value
-                if 'uninstall' not in key and '安装' not in key:
+                if not any(x in key for x in ('uninstall', 'uninst', 'unins', '卸载', 'remove', 'cleanup', 'setup', 'installer', '安装', '反安装', 'unregister')):
                     candidate = value
                     break
 
@@ -446,7 +448,134 @@ def execute_intent(intent_name, slots):
     if intent_name == 'douyin_control':
         return _execute_douyin_control(slots.get('action', ''))
 
+    # 系统控制（支持确认机制）
+    from .config import load_config
+    cfg = load_config()
+    confirm_required = cfg.get('confirm_dangerous_actions', True)
+
+    if intent_name == 'systemShutdown':
+        if confirm_required and not confirm_action():
+            return False, '已取消关机'
+        return system_shutdown()
+    if intent_name == 'systemReboot':
+        if confirm_required and not confirm_action():
+            return False, '已取消重启'
+        return system_reboot()
+    if intent_name == 'systemLock':
+        return system_lock()
+    if intent_name == 'systemSleep':
+        if confirm_required and not confirm_action():
+            return False, '已取消休眠'
+        return system_sleep()
+    if intent_name == 'open_system_panel':
+        return open_system_panel(slots.get('panel', ''))
+
     return False, '未识别的意图'
+
+
+def _is_windows():
+    return sys.platform == 'win32' or sys.platform == 'cygwin'
+
+
+def system_shutdown():
+    """关机"""
+    if not _is_windows():
+        return False, '仅支持 Windows 系统'
+    try:
+        os.system('shutdown /s /t 30')
+        return True, '系统将在 30 秒后关机'
+    except Exception as e:
+        return False, f'关机失败: {e}'
+
+
+def system_reboot():
+    """重启"""
+    if not _is_windows():
+        return False, '仅支持 Windows 系统'
+    try:
+        os.system('shutdown /r /t 30')
+        return True, '系统将在 30 秒后重启'
+    except Exception as e:
+        return False, f'重启失败: {e}'
+
+
+def system_lock():
+    """锁屏"""
+    if not _is_windows():
+        return False, '仅支持 Windows 系统'
+    try:
+        user32 = ctypes.windll.user32
+        result = user32.LockWorkStation()
+        if result:
+            return True, '已锁定屏幕'
+        return False, '锁定屏幕失败'
+    except Exception as e:
+        return False, f'锁定屏幕失败: {e}'
+
+
+def system_sleep():
+    """休眠/睡眠"""
+    if not _is_windows():
+        return False, '仅支持 Windows 系统'
+    try:
+        powrprof = ctypes.windll.powrprof
+        result = powrprof.SetSuspendState(False, True, True)
+        if result:
+            return True, '系统已进入睡眠模式'
+        result = powrprof.SetSuspendState(True, True, True)
+        if result:
+            return True, '系统已进入休眠模式'
+        return False, '系统无法进入睡眠/休眠模式'
+    except Exception as e:
+        return False, f'进入睡眠模式失败: {e}'
+
+
+def confirm_action():
+    """请求用户确认（用于危险操作）"""
+    try:
+        confirm = input('确定要执行此操作吗？(y/n)：').strip().lower()
+        return confirm in ('y', 'yes', '是', '确认')
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
+# 系统面板命令映射表
+SYSTEM_PANEL_COMMANDS = {
+    '设置': 'start ms-settings:',
+    '控制面板': 'control',
+    '任务管理器': 'taskmgr',
+    '网络设置': 'start ms-settings:network',
+    '无线设置': 'start ms-settings:network',
+    '蓝牙设置': 'start ms-settings:bluetooth',
+    '声音设置': 'start ms-settings:sound',
+    '音频设置': 'start ms-settings:sound',
+    '显示设置': 'start ms-settings:display',
+    '屏幕设置': 'start ms-settings:display',
+    '电源设置': 'start ms-settings:powersleep',
+    '个性化设置': 'start ms-settings:personalization',
+    '主题设置': 'start ms-settings:personalization',
+    '应用设置': 'start ms-settings:appsfeatures',
+    '应用管理': 'start ms-settings:appsfeatures',
+    '任务栏设置': 'start ms-settings:taskbar',
+    '投影设置': 'start ms-settings:project',
+    '投屏': 'start ms-settings:project',
+    '截图': 'snippingtool',
+    '截屏': 'snippingtool',
+    '清空回收站': 'powershell -Command "Clear-RecycleBin -Force"',
+    '浏览器': 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+}
+
+
+def open_system_panel(panel_name):
+    """打开Windows系统面板或工具"""
+    cmd = SYSTEM_PANEL_COMMANDS.get(panel_name)
+    if not cmd:
+        return False, f'未知系统面板: {panel_name}'
+    try:
+        subprocess.Popen(cmd, shell=True)
+        return True, f'已打开{panel_name}'
+    except Exception as e:
+        return False, f'打开{panel_name}失败: {e}'
 
 
 def _execute_douyin_control(action):
@@ -457,10 +586,10 @@ def _execute_douyin_control(action):
         try:
             from nlu.douyin_controller import DouyinController
         except ImportError:
-            return False, '抖音控制模块未安装（pyautogui）'
+            return False, f'抖音 [{action}] 控制失败：缺少 pyautogui 依赖（pip install pyautogui）'
 
     controller = DouyinController()
     if not controller.is_available():
-        return False, 'pyautogui 不可用，无法执行抖音控制'
+        return False, f'抖音 [{action}] 控制失败：pyautogui 不可用'
 
     return controller.trigger(action)

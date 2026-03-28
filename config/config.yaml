@@ -15,3 +15,9 @@ app_map_path: ../config/app_map.json
 nlu_engine: fuzzy_regex
 enable_asr_correction: true
 enable_douyin_control: true
+# 唤醒词检测配置
+enable_wake_word_detector: false  # 停用 VAD，回退到文本模式
+wake_word_engine: text_fallback  # sherpaonnx_vad / porcupine / text_fallback
+wake_word_sensitivity: 0.5  # 检测灵敏度 (0.0-1.0)
+# 危险操作确认（关机/重启/休眠），默认开启
+confirm_dangerous_actions: true

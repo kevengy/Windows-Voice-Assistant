@@ -20,6 +20,14 @@
 - 记事本、计算器、文件管理器等系统工具快速打开
 - 支持扩展插件自定义指令
 
+### 系统面板控制
+- 打开 Windows 设置、控制面板、任务管理器
+- 打开网络设置、蓝牙设置、声音设置、显示设置
+- 打开电源设置、个性化设置、应用设置、任务栏设置
+- 截图工具、投影设置
+- 清空回收站
+- 默认浏览器为 Microsoft Edge
+
 ### 跨应用键盘自动化（V2 新增）
 - **抖音控制** — 通过 pyautogui 模拟键盘快捷键
   - 播放/暂停（Space）、点赞（L）、评论（I）、关注（F）
@@ -40,6 +48,25 @@
 | 存入文件夹 C:\test 内容 测试文本 | 保存文本到文件夹 |
 | 列出应用 | 显示已注册应用列表 |
 | 检查应用 VSCode | 查询应用是否已安装 |
+| 打开设置 | 打开 Windows 设置面板 |
+| 打开控制面板 | 打开控制面板 |
+| 任务管理器 | 打开任务管理器 |
+| 网络设置 | 打开网络设置 |
+| 蓝牙设置 | 打开蓝牙设置 |
+| 声音设置 | 打开声音设置 |
+| 显示设置 | 打开显示设置 |
+| 电源设置 | 打开电源设置 |
+| 个性化设置 | 打开个性化/主题设置 |
+| 应用设置 | 打开应用设置 |
+| 任务栏设置 | 打开任务栏设置 |
+| 投影设置 | 打开投影设置 |
+| 截图 / 截屏 | 打开截图工具 |
+| 清空回收站 | 清空回收站 |
+| 打开浏览器 | 使用 Edge 打开浏览器 |
+| 关机 | 系统 30 秒后关机 |
+| 重启 | 系统 30 秒后重启 |
+| 息屏 / 锁屏 | 锁定屏幕 |
+| 休眠 / 睡眠 | 系统进入睡眠模式 |
 | 抖音点赞 | 点赞/取消点赞 |
 | 抖音收藏 | 收藏/取消收藏 |
 | 抖音关注 | 关注/取消关注 |
@@ -127,6 +154,7 @@ python src/main.py
 
 ```yaml
 wake_words:
+  - 你好小猪
   - 小助手
   - 助手
   - 你好助手
@@ -144,39 +172,45 @@ app_map_path: ../config/app_map.json
 nlu_engine: fuzzy_regex      # 解析引擎：fuzzy_regex / hybrid
 enable_asr_correction: true  # 启用 ASR 纠错
 enable_douyin_control: true # 启用抖音控制
+
+# 唤醒词检测配置
+enable_wake_word_detector: false  # 启用专用 VAD 唤醒词检测（需要 VAD 模型）
+wake_word_engine: text_fallback   # sherpaonnx_vad / porcupine / text_fallback
+confirm_dangerous_actions: true   # 关机/重启等危险操作需确认
 ```
 
 ## 项目结构
 
 ```
-Windows-interact-assistant/
+Windows-Voice-Assistant/
 ├── config/
 │   ├── config.yaml        # 主配置文件
 │   └── app_map.json       # 应用路径映射
 ├── data/
-│   ├── intents.json        # 意图定义
-│   └── intent_descriptions.json  # 语义匹配语料（V2）
+│   ├── intents.json        # 意图定义（含系统面板控制）
+│   └── intent_descriptions.json  # 语义描述
 ├── models/
 │   └── sense_voice/        # 语音识别模型（可选，需下载）
-│       ├── model_q8.onnx
+│       ├── model.int8.onnx
 │       └── tokens.txt
 ├── plugins/
 │   └── example_plugin.py   # 插件示例
 ├── src/
 │   ├── main.py            # 程序入口
 │   ├── config.py          # 配置加载
-│   ├── executor.py        # 指令执行
-│   ├── intents.py         # 意图解析（Legacy）
-│   ├── nlu/               # NLU 增强模块（V2）
-│   │   ├── __init__.py
-│   │   ├── phonetic_corrector.py  # ASR 纠错
-│   │   ├── fuzzy_regex.py         # 增强正则匹配
-│   │   ├── douyin_controller.py   # 抖音键盘控制
-│   │   └── hybrid_engine.py       # 混合 NLU 引擎
-│   ├── plugins.py          # 插件管理
-│   ├── recognize.py        # 语音识别
-│   ├── feedback.py         # 反馈（TTS/通知）
-│   └── logger.py           # 日志
+│   ├── executor.py        # 指令执行（含系统面板命令）
+│   ├── intents.py         # 意图解析
+│   ├── recognize.py       # 语音识别（sounddevice + Sherpa-onnx/Google STT）
+│   ├── feedback.py        # 反馈（TTS/通知）
+│   ├── logger.py          # 日志
+│   └── nlu/               # NLU 增强模块
+│       ├── __init__.py
+│       ├── phonetic_corrector.py  # ASR 纠错
+│       ├── fuzzy_regex.py         # 增强正则匹配
+│       ├── rules.py               # 共享回退规则
+│       ├── douyin_controller.py   # 抖音键盘控制
+│       ├── wake_word_detector.py  # VAD 唤醒词检测
+│       └── hybrid_engine.py       # 混合 NLU 引擎（预备）
 ├── README.md
 └── 功能规划大纲.md
 ```
@@ -209,6 +243,13 @@ def execute(slots):
 ```
 
 ## 版本历史
+
+### v1.3
+- 新增系统面板控制（设置、控制面板、任务管理器、网络/蓝牙/声音/显示设置等）
+- 新增截图工具、投影设置、清空回收站
+- 浏览器默认改为 Microsoft Edge
+- 优化 FuzzyRegex 意图匹配，防止系统面板指令被误识别为应用名
+- 新增 VAD 唤醒词检测模块（sherpaonnx_vad / porcupine / text_fallback）
 
 ### v1.2
 - 新增本地离线语音识别（Sherpa-onnx + SenseVoice）

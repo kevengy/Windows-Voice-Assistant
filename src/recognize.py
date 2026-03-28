@@ -232,6 +232,45 @@ class SpeechRecognizer:
 
         return False, '语音识别失败'
 
+    def listen_await_wake_word(self, wake_word_detector=None, timeout=60):
+        """
+        使用专用唤醒词检测器（VAD）进行常驻监听
+        检测到语音活动后返回 True，后续由 listen_once() 捕获指令
+
+        Args:
+            wake_word_detector: WakeWordDetector 实例
+            timeout: 最大监听时间（秒）
+        Returns:
+            (True, None) - 检测到语音活动
+            (False, reason) - 超时或错误
+        """
+        import time
+        if wake_word_detector is None:
+            return False, '未配置唤醒词检测器'
+
+        wake_word_detector.start()
+        start_time = time.time()
+
+        try:
+            while time.time() - start_time < timeout:
+                # 录制短音频片段（约 0.3 秒）
+                ok, audio_or_err = self.microphone.listen(
+                    timeout=5,
+                    phrase_time_limit=0.5
+                )
+                if not ok:
+                    continue
+
+                # VAD 检测是否包含语音
+                if wake_word_detector.detect_from_bytes(audio_or_err):
+                    wake_word_detector.stop()
+                    return True, None
+
+        finally:
+            wake_word_detector.stop()
+
+        return False, '唤醒词检测超时'
+
 
 class SherpaONNXRecognizer:
     """
@@ -414,6 +453,43 @@ class SherpaONNXRecognizer:
                 return True, normalized
 
         return False, '语音识别失败'
+
+    def listen_await_wake_word(self, wake_word_detector=None, timeout=60):
+        """
+        使用专用唤醒词检测器（VAD）进行常驻监听
+        检测到语音活动后返回 True，后续由 listen_once() 捕获指令
+
+        Args:
+            wake_word_detector: WakeWordDetector 实例
+            timeout: 最大监听时间（秒）
+        Returns:
+            (True, None) - 检测到语音活动
+            (False, reason) - 超时或错误
+        """
+        import time
+        if wake_word_detector is None:
+            return False, '未配置唤醒词检测器'
+
+        wake_word_detector.start()
+        start_time = time.time()
+
+        try:
+            while time.time() - start_time < timeout:
+                ok, audio_or_err = self.microphone.listen(
+                    timeout=5,
+                    phrase_time_limit=0.5
+                )
+                if not ok:
+                    continue
+
+                if wake_word_detector.detect_from_bytes(audio_or_err):
+                    wake_word_detector.stop()
+                    return True, None
+
+        finally:
+            wake_word_detector.stop()
+
+        return False, '唤醒词检测超时'
 
 
 def test_recording():

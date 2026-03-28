@@ -38,5 +38,10 @@
     "name": "douyin_control",
     "description": "控制抖音播放，如播放、暂停、点赞、评论、滚动、关注、分享等操作",
     "slots": {"action": "抖音操作指令"}
+  },
+  {
+    "name": "open_system_panel",
+    "description": "打开Windows系统面板或工具，包括设置、控制面板、任务管理器、网络设置、蓝牙、声音、显示、电源、个性化、应用管理、任务栏、投影、截图工具等",
+    "slots": {"panel": "系统面板名称"}
   }
 ]
