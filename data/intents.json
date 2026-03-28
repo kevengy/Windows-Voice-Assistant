@@ -1,5 +1,10 @@
 [
   {
+    "name": "set_volume",
+    "patterns": ["音量.*"],
+    "slots": {"value": "音量.*?(\\d+)"}
+  },
+  {
     "name": "open_system_panel",
     "patterns": [
       "打开设置", "设置",
@@ -31,11 +36,6 @@
     "name": "close_app",
     "patterns": ["关闭.*", "退出.*"],
     "slots": {"app_name": "(?:关闭|退出)\\s*(.*)"}
-  },
-  {
-    "name": "set_volume",
-    "patterns": ["音量.*"],
-    "slots": {"value": "音量\\s?(\\d+)"}
   },
   {
     "name": "set_timer",
