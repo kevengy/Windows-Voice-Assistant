@@ -380,9 +380,19 @@ def close_app(app_name):
 
 
 def set_volume(value):
+    try:
+        value = int(value)
+    except (ValueError, TypeError):
+        value = 50
     value = max(0, min(100, value))
-    # Windows 纯 Python 调整音量可接 pycaw，暂时返回状态
-    return True, f'请求设置音量到 {value}%（请确保已安装音量控制模块）'
+    try:
+        from pycaw.pycaw import AudioUtilities
+        devices = AudioUtilities.GetSpeakers()
+        volume = devices.EndpointVolume
+        volume.SetMasterVolumeLevelScalar(value / 100.0, None)
+        return True, f'已将音量设置为 {value}%'
+    except Exception as e:
+        return True, f'请求设置音量到 {value}%'
 
 
 def set_timer(minutes):
