@@ -222,6 +222,10 @@ class PhoneticCorrector:
         original = text
         text = text.strip().lower()
 
+        # 0. 如果输入文本本身就是一个已知命令，直接返回（避免误纠正）
+        if text in self.commands:
+            return text
+
         # 1. 检查常见ASR错误映射（快速路径）
         for error, correct in self._common_asr_errors.items():
             if error in text:
